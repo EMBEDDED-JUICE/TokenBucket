@@ -135,8 +135,8 @@ module tb_one_shot;
         // Report
         $display("====================================================");
         $display("Errors: %0d", errors);
-        if (errors == 0) $display("RESULT: PASS ✅");
-        else             $display("RESULT: FAIL ❌");
+        if (errors == 0) $display("RESULT: PASS ");
+        else             $display("RESULT: FAIL ");
         $display("VCD written to one_shot.vcd");
         $display("====================================================");
         $finish;
