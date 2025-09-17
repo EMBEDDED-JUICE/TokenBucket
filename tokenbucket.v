@@ -1,11 +1,5 @@
 `timescale 1ns/1ns
 
-// -----------------------------------------------------------------------------
-// One-Shot Pulse Generator (Monostable) — Verilog-2001 compatible
-// On rising edge of trig, y stays high for exactly PULSE_LEN cycles.
-// RETRIGGERABLE=1: rising edges during active pulse reload (extend) the pulse.
-// RETRIGGERABLE=0: extra triggers during active pulse are ignored.
-// -----------------------------------------------------------------------------
 module one_shot #(
     parameter PULSE_LEN     = 8,   // >= 1
     parameter RETRIGGERABLE = 0
