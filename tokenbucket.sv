@@ -1,68 +1,63 @@
-`timescale 1ns/1ns
+`timescale 1ns/1ps
 
 module one_shot #(
-    parameter PULSE_LEN     = 8,   // >= 1
-    parameter RETRIGGERABLE = 0
+    parameter int PULSE_LEN     = 6,  // >= 1
+    parameter bit RETRIGGERABLE = 0
 )(
-    input  clk,
-    input  rst_n,   // active-low synchronous reset
-    input  trig,    // synchronous trigger
-    output reg y    // 1 while pulse is active
+    input  logic clk,
+    input  logic rst_n,   // active-low synchronous reset
+    input  logic trig,    // synchronous trigger
+    output logic y        // 1 while pulse is active
 );
 
-    // Verilog-2001-friendly ceil(log2(PULSE_LEN+1))
-    function integer CLOG2;
-        input integer value;
-        integer i;
-        begin
-            value = value - 1;
-            for (i = 0; value > 0; i = i + 1)
-                value = value >> 1;
-            if (i == 0) CLOG2 = 1; else CLOG2 = i;
+    // Ceil log2 helper: enough bits for [0..PULSE_LEN]
+    function automatic int clog2_plus1(input int n);
+        int w; begin
+            w = 0; while ((1 << w) < n) w++;
+            return (w == 0) ? 1 : w;
         end
     endfunction
+    localparam int CW = clog2_plus1(PULSE_LEN + 1);
 
-    localparam CW = CLOG2(PULSE_LEN + 1);
+    // State
+    logic          trig_q;
+    logic [CW-1:0] cnt_q, cnt_n;
 
-    reg              trig_q;
-    reg [CW-1:0]     cnt_q, cnt_n;
-    wire             trig_rise = trig & ~trig_q;
-    wire             active    = (cnt_q != {CW{1'b0}});
-
-    // sample trigger
-    always @(posedge clk) begin
+    // Sync edge detect
+    always_ff @(posedge clk) begin
         if (!rst_n) trig_q <= 1'b0;
         else        trig_q <= trig;
     end
+    wire trig_rise = trig & ~trig_q;
+    wire active    = (cnt_q != '0);
 
-    // next-state counter
-    always @* begin
+    // Next-state counter
+    always_comb begin
         cnt_n = cnt_q;
         if (trig_rise) begin
-            if (!active || (RETRIGGERABLE != 0))
-                cnt_n = PULSE_LEN; // start/extend
-            else
-                cnt_n = (cnt_q == {CW{1'b0}}) ? cnt_q : (cnt_q - {{(CW-1){1'b0}},1'b1}); // ignore retrigger
-        end else if (active) begin
-            cnt_n = cnt_q - {{(CW-1){1'b0}},1'b1};
-        end else begin
-            cnt_n = {CW{1'b0}};
+            if (!active || RETRIGGERABLE) cnt_n = PULSE_LEN[CW-1:0];       // start/extend
+            else                          cnt_n = (cnt_q == '0) ? '0 : (cnt_q - 1); // ignore retrigger
+        end
+        else if (active) begin
+            cnt_n = cnt_q - 1;
+        end
+        else begin
+            cnt_n = '0;
         end
     end
 
-    // state + registered output aligned to next-state
-    always @(posedge clk) begin
+    // State update + registered output reflecting next-state
+    always_ff @(posedge clk) begin
         if (!rst_n) begin
-            cnt_q <= {CW{1'b0}};
+            cnt_q <= '0;
             y     <= 1'b0;
         end else begin
             cnt_q <= cnt_n;
-            y     <= (cnt_n != {CW{1'b0}});
+            y     <= (cnt_n != '0);
         end
     end
 
-    initial begin
-        if (PULSE_LEN < 1) $display("ERROR: PULSE_LEN must be >= 1");
-    end
-endmodule
+    // Parameter guard (sim aid)
+    initial if (PULSE_LEN < 1) $error("PULSE_LEN must be >= 1");
 
+endmodule
