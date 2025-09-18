@@ -1,23 +1,25 @@
 `timescale 1ns/1ps
+module tb_token_bucket;
 
-module tb_one_shot;
+    // ---- Parameters you can tweak for your report ----
+    localparam integer DEN        = 16;  // tokens per request
+    localparam integer RATE_NUM   = 3;   // tokens added per cycle
+    localparam integer BURST_MAX  = 8;   // max requests worth buffered
+    localparam integer TOKEN_COST = DEN; // cost per grant
 
-    // ---- Parameters to visualize behavior ----
-    localparam PULSE_LEN = 6;
+    // Expected average rate = 3/16 reqs/cycle; burst up to 8 in a row (if filled)
 
-    // ---- DUT I/O ----
-    reg  clk, rst_n, trig;
-    wire y_non, y_retrig;
+    reg  clk, rst_n;
+    reg  req_i;
+    wire grant_o, ready_o;
 
-    // Two DUTs: non-retriggerable and retriggerable
-    one_shot #(.PULSE_LEN(PULSE_LEN), .RETRIGGERABLE(0)) dut_non (
-        .clk(clk), .rst_n(rst_n), .trig(trig), .y(y_non)
+    token_bucket #(
+        .DEN(DEN), .RATE_NUM(RATE_NUM), .BURST_MAX(BURST_MAX), .TOKEN_COST(TOKEN_COST)
+    ) dut (
+        .clk(clk), .rst_n(rst_n), .req_i(req_i), .grant_o(grant_o), .ready_o(ready_o)
     );
-    one_shot #(.PULSE_LEN(PULSE_LEN), .RETRIGGERABLE(1)) dut_re (
-        .clk(clk), .rst_n(rst_n), .trig(trig), .y(y_retrig)
-    );
 
-    // 100 MHz clock
+    // Clock: 100 MHz (10 ns period)
     initial begin
         clk = 1'b0;
         forever #5 clk = ~clk;
@@ -25,135 +27,127 @@ module tb_one_shot;
 
     // Wave dump
     initial begin
-        $dumpfile("one_shot.vcd");
-        $dumpvars(0, tb_one_shot);
+        $dumpfile("token_bucket.vcd");
+        $dumpvars(0, tb_token_bucket);
     end
 
-    // ----------------- Scoreboard (aligned to registered outputs) -----------------
-    integer cnt_non, cnt_re;
-    reg     exp_y_non_q, exp_y_re_q;
-    reg     trig_q;
-    integer errors;
+    // ----------------- Reference Model (Scoreboard) -----------------
+    integer TOK_MAX;
+    integer tokens_ref;
+    integer grants_ref, grants_dut, reqs_total;
+    integer i;
 
-    // helper: absolute value for $random
-    function integer abs_i;
-        input integer v;
-        begin abs_i = (v < 0) ? -v : v; end
-    endfunction
-
-    // Single checker tick each posedge
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            cnt_non      <= 0;
-            cnt_re       <= 0;
-            exp_y_non_q  <= 1'b0;
-            exp_y_re_q   <= 1'b0;
-            trig_q       <= 1'b0;
-            errors       <= 0;
-        end else begin
-            // Compare DUT outputs against previous-cycle expectations
-            if (y_non !== exp_y_non_q) begin
-                $display("MISMATCH(NON) @%0t: exp=%0d got=%0d (cnt_non=%0d)", $time, exp_y_non_q, y_non, cnt_non);
-                errors <= errors + 1;
-            end
-            if (y_retrig !== exp_y_re_q) begin
-                $display("MISMATCH(RETRIG) @%0t: exp=%0d got=%0d (cnt_re=%0d)", $time, exp_y_re_q, y_retrig, cnt_re);
-                errors <= errors + 1;
-            end
-
-            // Compute next expectations (mirror DUT semantics)
-            // rising edge of trig
-            // (use registered trig_q so it's aligned with DUT's edge detector)
-            // trig_rise = trig & ~trig_q;
-            if (trig & ~trig_q) begin
-                // non-retriggerable
-                if (cnt_non == 0) cnt_non <= PULSE_LEN;
-                else              cnt_non <= (cnt_non > 0) ? (cnt_non - 1) : 0;
-
-                // retriggerable
-                cnt_re <= PULSE_LEN;
-            end else begin
-                // no new trigger
-                if (cnt_non > 0) cnt_non <= cnt_non - 1;
-                else             cnt_non <= 0;
-
-                if (cnt_re  > 0) cnt_re  <= cnt_re  - 1;
-                else             cnt_re  <= 0;
-            end
-
-            // Next expected y (registered like the DUT)
-            exp_y_non_q <= ( (trig & ~trig_q) ? ((cnt_non==0)?PULSE_LEN:((cnt_non>0)?(cnt_non-1):0)) :
-                             ((cnt_non>0)?(cnt_non-1):0) ) != 0;
-
-            exp_y_re_q  <= ( (trig & ~trig_q) ? PULSE_LEN :
-                             ((cnt_re>0)?(cnt_re-1):0) ) != 0;
-
-            trig_q <= trig;
-        end
-    end
-
-    // ----------------- Stimulus -----------------
-    task pulse; input integer cycles;
+    // Stimulus helpers
+    task hold_requests(input integer cycles, input bit on);
+        integer k;
         begin
-            @(negedge clk); trig <= 1'b1;
-            repeat (cycles) @(posedge clk);
-            @(negedge clk); trig <= 1'b0;
+            for (k = 0; k < cycles; k = k + 1) begin
+                @(negedge clk);
+                req_i = on;
+                @(posedge clk);
+                step_ref_and_check();
+            end
         end
     endtask
 
-    task idle; input integer cycles;
+    task random_requests(input integer cycles, input integer prob_perc);
+        integer k, r;
         begin
-            @(negedge clk); trig <= 1'b0;
-            repeat (cycles) @(posedge clk);
+            for (k = 0; k < cycles; k = k + 1) begin
+                @(negedge clk);
+                // $urandom_range requires -g2012; fallback to $random if needed
+                r = $urandom_range(0,99);
+                req_i = (r < prob_perc);
+                @(posedge clk);
+                step_ref_and_check();
+            end
         end
     endtask
 
-    // simple rand-range using $random (no $urandom_range)
-    function integer rand_range;
-        input integer lo, hi; integer r, span;
+    // One reference-model step + checks at each posedge
+    task step_ref_and_check;
+        integer exp_grant;
         begin
-            span = hi - lo + 1;
-            r = abs_i($random) % span;
-            rand_range = lo + r;
+            // Count requests
+            if (req_i) reqs_total = reqs_total + 1;
+
+            // Token accrual (saturate)
+            tokens_ref = tokens_ref + RATE_NUM;
+            if (tokens_ref > TOK_MAX) tokens_ref = TOK_MAX;
+
+            // Decide expected grant
+            exp_grant = (req_i && (tokens_ref >= TOKEN_COST)) ? 1 : 0;
+
+            if (exp_grant) begin
+                tokens_ref = tokens_ref - TOKEN_COST;
+                grants_ref = grants_ref + 1;
+            end
+
+            // DUT counters
+            if (grant_o) grants_dut = grants_dut + 1;
+
+            // Assertions / Checks
+            if (grant_o && !req_i) begin
+                $display("ERROR @%0t: grant without request", $time);
+                error_count = error_count + 1;
+            end
+            if (grant_o !== exp_grant) begin
+                $display("MISMATCH @%0t: exp_grant=%0d, dut_grant=%0d, tokens_ref=%0d",
+                          $time, exp_grant, grant_o, tokens_ref);
+                error_count = error_count + 1;
+            end
         end
-    endfunction
+    endtask
+
+    integer error_count;
 
     initial begin
+        TOK_MAX     = BURST_MAX * DEN;
+        tokens_ref  = TOK_MAX; // match DUT reset init
+        grants_ref  = 0;
+        grants_dut  = 0;
+        reqs_total  = 0;
+        error_count = 0;
+
         // Reset
-        trig = 1'b0; rst_n = 1'b0;
+        rst_n = 1'b0; req_i = 1'b0;
         repeat (5) @(posedge clk);
         rst_n = 1'b1;
 
-        // P1) Single 1-cycle trigger
-        pulse(1); repeat (PULSE_LEN+2) @(posedge clk);
+        // ----------------- Test Plan -----------------
+        // 1) Immediate burst drain (req high): should get up to BURST_MAX back-to-back grants,
+        //    then shaped by average rate RATE_NUM/DEN.
+        hold_requests(40, 1'b1);
 
-        // P2) Dense triggers within active window
-        pulse(1); repeat (2) @(posedge clk);
-        pulse(1); repeat (2) @(posedge clk);
-        pulse(1); repeat (PULSE_LEN+3) @(posedge clk);
+        // 2) Idle to refill bucket
+        hold_requests(20, 1'b0);
 
-        // P3) Well-spaced triggers (>= PULSE_LEN apart)
-        idle(3);
-        pulse(1); repeat (PULSE_LEN+1) @(posedge clk);
-        pulse(1); repeat (PULSE_LEN+1) @(posedge clk);
+        // 3) Random traffic (30% request probability)
+        random_requests(300, 30);
 
-        // P4) Random bursts
-        begin : random_bursts
-            integer k;
-            for (k = 0; k < 40; k = k + 1) begin
-                if (rand_range(0,1) == 1) pulse(rand_range(1,2)); // 1–2 high
-                else                      idle (rand_range(1,4));  // 1–4 low
-                @(posedge clk);
-            end
-        end
+        // 4) On/Off bursty traffic
+        hold_requests(50, 1'b1);
+        hold_requests(50, 1'b0);
+        hold_requests(50, 1'b1);
 
-        // Report
+        // 5) Heavy request pressure (req every cycle)
+        hold_requests(200, 1'b1);
+
+        // ----------------- Report -----------------
         $display("====================================================");
-        $display("Errors: %0d", errors);
-        if (errors == 0) $display("RESULT: PASS");
-        else             $display("RESULT: FAIL");
-        $display("VCD written to one_shot.vcd");
+        $display("Requests total : %0d", reqs_total);
+        $display("Grants (ref)   : %0d", grants_ref);
+        $display("Grants (DUT)   : %0d", grants_dut);
+        $display("Errors         : %0d", error_count);
+        if (error_count==0 && grants_ref==grants_dut)
+            $display("RESULT: PASS ✅  (DUT == reference, shaped correctly)");
+        else
+            $display("RESULT: FAIL ❌");
+        $display("Avg rate target ~ %0d/%0d = %f req/cycle",
+                 RATE_NUM, DEN, 1.0*RATE_NUM/DEN);
+        $display("VCD written to token_bucket.vcd");
         $display("====================================================");
+
         $finish;
     end
 
