@@ -12,40 +12,36 @@ module token_bucket #(
     output reg  grant_o,
     output wire ready_o
 );
-    localparam integer TOK_MAX = BURST_MAX * DEN;
+    // Capacity in "token units" (scale = DEN per request)
+    localparam [31:0] TOK_MAX_32 = BURST_MAX * DEN;
 
-    // Token counter in fixed-point "token units" (scale = DEN per request)
-    reg [31:0] tokens_q, tokens_d;
+    // Token counter
+    reg  [31:0] tokens_q;
 
-    wire have_tokens = (tokens_q >= TOKEN_COST);
-    assign ready_o   = have_tokens;
+    // --- Post-add saturated tokens this cycle ---
+    wire [32:0] sum_ext     = {1'b0, tokens_q} + RATE_NUM[31:0];
+    wire [32:0] tokmax_ext  = {1'b0, TOK_MAX_32};
+    wire [31:0] add_sat     = (sum_ext > tokmax_ext) ? TOK_MAX_32 : sum_ext[31:0];
 
-    // Saturating add
-    function [31:0] sat_add(input [31:0] a, input [31:0] b, input [31:0] maxv);
-        reg [32:0] sum;
-        begin
-            sum = a + b;
-            sat_add = (sum > maxv) ? maxv : sum[31:0];
-        end
-    endfunction
+    // Decide grant using post-add tokens
+    wire        can_grant   = (add_sat >= TOKEN_COST[31:0]);
+    wire        will_grant  = req_i && can_grant;
 
-    always @(*) begin
-        // Default: accumulate tokens each cycle up to TOK_MAX
-        tokens_d = sat_add(tokens_q, RATE_NUM[31:0], TOK_MAX[31:0]);
-        if (req_i && have_tokens) begin
-            tokens_d = tokens_d - TOKEN_COST[31:0]; // consume on grant
-        end
-    end
+    // Next token count after optional consume
+    wire [31:0] next_tokens = will_grant ? (add_sat - TOKEN_COST[31:0]) : add_sat;
 
+    // Ready means: could we grant a request right now?
+    assign ready_o = can_grant;
+
+    // State update
     always @(posedge clk) begin
         if (!rst_n) begin
-            // Start full to demonstrate bursting immediately (common bucket init);
-            // change to 0 for a "cold start".
-            tokens_q <= TOK_MAX[31:0];
+            tokens_q <= TOK_MAX_32;  // start full for immediate burst demo
             grant_o  <= 1'b0;
         end else begin
-            tokens_q <= tokens_d;
-            grant_o  <= req_i && have_tokens;
+            tokens_q <= next_tokens;
+            grant_o  <= will_grant;
         end
     end
+
 endmodule
