@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module tb_token_bucket;
+module tb_top_module;
 
     // ---- Tunable params (plain Verilog) ----
     localparam DEN        = 16;  // tokens per request
@@ -11,7 +11,8 @@ module tb_token_bucket;
     reg  req_i;
     wire grant_o, ready_o;
 
-    token_bucket #(
+    // Instantiate DUT with name 'top_module'
+    top_module #(
         .DEN(DEN), .RATE_NUM(RATE_NUM), .BURST_MAX(BURST_MAX), .TOKEN_COST(TOKEN_COST)
     ) dut (
         .clk(clk), .rst_n(rst_n), .req_i(req_i), .grant_o(grant_o), .ready_o(ready_o)
@@ -26,7 +27,7 @@ module tb_token_bucket;
     // Wave dump
     initial begin
         $dumpfile("token_bucket.vcd");
-        $dumpvars(0, tb_token_bucket);
+        $dumpvars(0, tb_top_module);
     end
 
     // ----------------- Reference Model (Scoreboard) -----------------
@@ -45,7 +46,7 @@ module tb_token_bucket;
                 @(negedge clk);
                 req_i = on;
                 @(posedge clk);
-                #1;  // <<<<<<<<<< key fix: allow NBAs to update grant_o
+                #1;  // allow NBAs to update grant_o
                 step_ref_and_check();
             end
         end
@@ -61,7 +62,7 @@ module tb_token_bucket;
                 r = $random; if (r < 0) r = -r; r = r % 100;
                 req_i = (r < prob_perc);
                 @(posedge clk);
-                #1;  // <<<<<<<<<< key fix
+                #1;  // allow NBAs to update grant_o
                 step_ref_and_check();
             end
         end
