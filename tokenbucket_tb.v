@@ -37,20 +37,10 @@ module tb_token_bucket;
     integer grants_ref, grants_dut, reqs_total;
     integer error_count;
 
-    // -------- Stimulus helpers (non-ANSI task ports; no 'bit', no $urandom_range) --------
-    task hold_requests;
-        integer cycles;
-        reg on;
-        integer k;
-        begin
-            // arguments are passed via task automatic variables below
-        end
-    endtask
-
-    // Re-define with body (Verilog tasks can’t have overloading; use a separate name)
+    // -------- Stimulus helpers (Verilog-2001 compatible) --------
     task do_hold_requests;
         input integer cycles;
-        input on;
+        input on;           // 1-bit by default
         integer k;
         begin
             for (k = 0; k < cycles; k = k + 1) begin
@@ -81,19 +71,21 @@ module tb_token_bucket;
     endtask
 
     // One reference-model step + checks at each posedge
+    // *** POST-ADD semantics to match the DUT ***
     task step_ref_and_check;
         integer exp_grant;
         begin
             // Count requests
             if (req_i) reqs_total = reqs_total + 1;
 
-            // Token accrual (saturate)
+            // Token accrual (saturate) FIRST
             tokens_ref = tokens_ref + RATE_NUM;
             if (tokens_ref > TOK_MAX) tokens_ref = TOK_MAX;
 
-            // Decide expected grant
+            // Decide expected grant using post-add tokens
             exp_grant = (req_i && (tokens_ref >= TOKEN_COST)) ? 1 : 0;
 
+            // Consume if granted
             if (exp_grant) begin
                 tokens_ref = tokens_ref - TOKEN_COST;
                 grants_ref = grants_ref + 1;
