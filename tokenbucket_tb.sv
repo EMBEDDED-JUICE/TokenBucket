@@ -3,17 +3,17 @@
 module tb_one_shot;
 
     // ---- Parameters to visualize behavior ----
-    localparam int PULSE_LEN = 6;
+    localparam PULSE_LEN = 6;
 
     // ---- DUT I/O ----
-    logic clk, rst_n, trig;
-    logic y_non, y_retrig;
+    reg  clk, rst_n, trig;
+    wire y_non, y_retrig;
 
     // Two DUTs: non-retriggerable and retriggerable
-    one_shot #(.PULSE_LEN(PULSE_LEN), .RETRIGGERABLE(1'b0)) dut_non (
+    one_shot #(.PULSE_LEN(PULSE_LEN), .RETRIGGERABLE(0)) dut_non (
         .clk(clk), .rst_n(rst_n), .trig(trig), .y(y_non)
     );
-    one_shot #(.PULSE_LEN(PULSE_LEN), .RETRIGGERABLE(1'b1)) dut_re (
+    one_shot #(.PULSE_LEN(PULSE_LEN), .RETRIGGERABLE(1)) dut_re (
         .clk(clk), .rst_n(rst_n), .trig(trig), .y(y_retrig)
     );
 
@@ -25,19 +25,24 @@ module tb_one_shot;
 
     // Wave dump
     initial begin
-        $dumpfile("one_shot.sv.vcd");
+        $dumpfile("one_shot.vcd");
         $dumpvars(0, tb_one_shot);
     end
 
     // ----------------- Scoreboard (aligned to registered outputs) -----------------
-    // We compare DUT y (this cycle) to last cycle's expected y, then compute next expectations.
-    int  cnt_non, cnt_re;
-    bit  exp_y_non_q, exp_y_re_q;
-    bit  trig_q;
-    int  errors;
+    integer cnt_non, cnt_re;
+    reg     exp_y_non_q, exp_y_re_q;
+    reg     trig_q;
+    integer errors;
+
+    // helper: absolute value for $random
+    function integer abs_i;
+        input integer v;
+        begin abs_i = (v < 0) ? -v : v; end
+    endfunction
 
     // Single checker tick each posedge
-    always_ff @(posedge clk) begin
+    always @(posedge clk) begin
         if (!rst_n) begin
             cnt_non      <= 0;
             cnt_re       <= 0;
@@ -47,7 +52,7 @@ module tb_one_shot;
             errors       <= 0;
         end else begin
             // Compare DUT outputs against previous-cycle expectations
-            if (y_non    !== exp_y_non_q) begin
+            if (y_non !== exp_y_non_q) begin
                 $display("MISMATCH(NON) @%0t: exp=%0d got=%0d (cnt_non=%0d)", $time, exp_y_non_q, y_non, cnt_non);
                 errors <= errors + 1;
             end
@@ -57,40 +62,61 @@ module tb_one_shot;
             end
 
             // Compute next expectations (mirror DUT semantics)
-            bit trig_rise = trig & ~trig_q;
+            // rising edge of trig
+            // (use registered trig_q so it's aligned with DUT's edge detector)
+            // trig_rise = trig & ~trig_q;
+            if (trig & ~trig_q) begin
+                // non-retriggerable
+                if (cnt_non == 0) cnt_non <= PULSE_LEN;
+                else              cnt_non <= (cnt_non > 0) ? (cnt_non - 1) : 0;
 
-            int next_non = cnt_non;
-            if (trig_rise) begin
-                if (cnt_non == 0) next_non = PULSE_LEN;
-                else              next_non = (cnt_non == 0) ? 0 : (cnt_non - 1); // ignore retrigger
-            end else if (cnt_non > 0) next_non = cnt_non - 1;
-            else                       next_non = 0;
+                // retriggerable
+                cnt_re <= PULSE_LEN;
+            end else begin
+                // no new trigger
+                if (cnt_non > 0) cnt_non <= cnt_non - 1;
+                else             cnt_non <= 0;
 
-            int next_re = cnt_re;
-            if (trig_rise)            next_re = PULSE_LEN; // start/extend
-            else if (cnt_re > 0)      next_re = cnt_re - 1;
-            else                      next_re = 0;
+                if (cnt_re  > 0) cnt_re  <= cnt_re  - 1;
+                else             cnt_re  <= 0;
+            end
 
-            // Update reference state and the "next" expected y
-            cnt_non      <= next_non;
-            cnt_re       <= next_re;
-            exp_y_non_q  <= (next_non != 0);
-            exp_y_re_q   <= (next_re  != 0);
-            trig_q       <= trig;
+            // Next expected y (registered like the DUT)
+            exp_y_non_q <= ( (trig & ~trig_q) ? ((cnt_non==0)?PULSE_LEN:((cnt_non>0)?(cnt_non-1):0)) :
+                             ((cnt_non>0)?(cnt_non-1):0) ) != 0;
+
+            exp_y_re_q  <= ( (trig & ~trig_q) ? PULSE_LEN :
+                             ((cnt_re>0)?(cnt_re-1):0) ) != 0;
+
+            trig_q <= trig;
         end
     end
 
-    // ----------------- Stimulus (does not call the scoreboard) -----------------
-    task automatic pulse(input int cycles);
-        @(negedge clk); trig <= 1'b1;
-        repeat (cycles) @(posedge clk);
-        @(negedge clk); trig <= 1'b0;
+    // ----------------- Stimulus -----------------
+    task pulse; input integer cycles;
+        begin
+            @(negedge clk); trig <= 1'b1;
+            repeat (cycles) @(posedge clk);
+            @(negedge clk); trig <= 1'b0;
+        end
     endtask
 
-    task automatic idle(input int cycles);
-        @(negedge clk); trig <= 1'b0;
-        repeat (cycles) @(posedge clk);
+    task idle; input integer cycles;
+        begin
+            @(negedge clk); trig <= 1'b0;
+            repeat (cycles) @(posedge clk);
+        end
     endtask
+
+    // simple rand-range using $random (no $urandom_range)
+    function integer rand_range;
+        input integer lo, hi; integer r, span;
+        begin
+            span = hi - lo + 1;
+            r = abs_i($random) % span;
+            rand_range = lo + r;
+        end
+    endfunction
 
     initial begin
         // Reset
@@ -101,8 +127,7 @@ module tb_one_shot;
         // P1) Single 1-cycle trigger
         pulse(1); repeat (PULSE_LEN+2) @(posedge clk);
 
-        // P2) Dense triggers within active window:
-        //     NON: still exactly PULSE_LEN; RETRIG: extends
+        // P2) Dense triggers within active window
         pulse(1); repeat (2) @(posedge clk);
         pulse(1); repeat (2) @(posedge clk);
         pulse(1); repeat (PULSE_LEN+3) @(posedge clk);
@@ -113,18 +138,21 @@ module tb_one_shot;
         pulse(1); repeat (PULSE_LEN+1) @(posedge clk);
 
         // P4) Random bursts
-        for (int k = 0; k < 40; k++) begin
-            if ($urandom_range(0,1)) pulse($urandom_range(1,2)); // 1–2 high
-            else                     idle($urandom_range(1,4));  // 1–4 low
-            @(posedge clk);
+        begin : random_bursts
+            integer k;
+            for (k = 0; k < 40; k = k + 1) begin
+                if (rand_range(0,1) == 1) pulse(rand_range(1,2)); // 1–2 high
+                else                      idle (rand_range(1,4));  // 1–4 low
+                @(posedge clk);
+            end
         end
 
         // Report
         $display("====================================================");
         $display("Errors: %0d", errors);
-        if (errors == 0) $display("RESULT: PASS ✅");
-        else             $display("RESULT: FAIL ❌");
-        $display("VCD written to one_shot.sv.vcd");
+        if (errors == 0) $display("RESULT: PASS");
+        else             $display("RESULT: FAIL");
+        $display("VCD written to one_shot.vcd");
         $display("====================================================");
         $finish;
     end
