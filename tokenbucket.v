@@ -57,3 +57,20 @@ module top_module #(
     // Implement the token bucket as specified above.
 
 endmodule
+
+/*Iteration: 0
+Model type: ChatGPT
+Model ID: gpt-4o-mini
+Number of responses: 5
+Compilation error
+Cost for response 0: $0.0002526000
+Compilation error
+Cost for response 1: $0.0002130000
+Compilation error
+Cost for response 2: $0.0002280000
+Compilation error
+Cost for response 3: $0.0002568000
+Compilation error
+Cost for response 4: $0.0002298000
+Response ranks: [-1, -1, -1, -1, -1]
+    Response lengths: [1310, 990, 1121, 1356, 1093]*/
