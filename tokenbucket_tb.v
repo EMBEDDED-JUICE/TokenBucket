@@ -1,11 +1,11 @@
 `timescale 1ns/1ps
 module tb_token_bucket;
 
-    // ---- Parameters you can tweak for your report ----
-    localparam integer DEN        = 16;  // tokens per request
-    localparam integer RATE_NUM   = 3;   // tokens added per cycle
-    localparam integer BURST_MAX  = 8;   // max requests worth buffered
-    localparam integer TOKEN_COST = DEN; // cost per grant
+    // ---- Tunable params (plain Verilog) ----
+    localparam DEN        = 16;  // tokens per request
+    localparam RATE_NUM   = 3;   // tokens added per cycle
+    localparam BURST_MAX  = 8;   // max requests worth buffered
+    localparam TOKEN_COST = DEN; // cost per grant
 
     // Expected average rate = 3/16 reqs/cycle; burst up to 8 in a row (if filled)
 
@@ -35,10 +35,22 @@ module tb_token_bucket;
     integer TOK_MAX;
     integer tokens_ref;
     integer grants_ref, grants_dut, reqs_total;
-    integer i;
+    integer error_count;
 
-    // Stimulus helpers
-    task hold_requests(input integer cycles, input bit on);
+    // -------- Stimulus helpers (non-ANSI task ports; no 'bit', no $urandom_range) --------
+    task hold_requests;
+        integer cycles;
+        reg on;
+        integer k;
+        begin
+            // arguments are passed via task automatic variables below
+        end
+    endtask
+
+    // Re-define with body (Verilog tasks can’t have overloading; use a separate name)
+    task do_hold_requests;
+        input integer cycles;
+        input on;
         integer k;
         begin
             for (k = 0; k < cycles; k = k + 1) begin
@@ -50,13 +62,17 @@ module tb_token_bucket;
         end
     endtask
 
-    task random_requests(input integer cycles, input integer prob_perc);
+    task random_requests;
+        input integer cycles;
+        input integer prob_perc; // 0..100
         integer k, r;
         begin
             for (k = 0; k < cycles; k = k + 1) begin
                 @(negedge clk);
-                // $urandom_range requires -g2012; fallback to $random if needed
-                r = $urandom_range(0,99);
+                // $random returns signed 32-bit; make 0..99
+                r = $random;
+                if (r < 0) r = -r;
+                r = r % 100;
                 req_i = (r < prob_perc);
                 @(posedge clk);
                 step_ref_and_check();
@@ -86,7 +102,7 @@ module tb_token_bucket;
             // DUT counters
             if (grant_o) grants_dut = grants_dut + 1;
 
-            // Assertions / Checks
+            // Checks
             if (grant_o && !req_i) begin
                 $display("ERROR @%0t: grant without request", $time);
                 error_count = error_count + 1;
@@ -99,8 +115,7 @@ module tb_token_bucket;
         end
     endtask
 
-    integer error_count;
-
+    // ----------------- Test sequence -----------------
     initial begin
         TOK_MAX     = BURST_MAX * DEN;
         tokens_ref  = TOK_MAX; // match DUT reset init
@@ -114,37 +129,35 @@ module tb_token_bucket;
         repeat (5) @(posedge clk);
         rst_n = 1'b1;
 
-        // ----------------- Test Plan -----------------
-        // 1) Immediate burst drain (req high): should get up to BURST_MAX back-to-back grants,
-        //    then shaped by average rate RATE_NUM/DEN.
-        hold_requests(40, 1'b1);
+        // 1) Immediate burst drain (req high)
+        do_hold_requests(40, 1'b1);
 
-        // 2) Idle to refill bucket
-        hold_requests(20, 1'b0);
+        // 2) Idle to refill
+        do_hold_requests(20, 1'b0);
 
-        // 3) Random traffic (30% request probability)
+        // 3) Random traffic (30% requests)
         random_requests(300, 30);
 
         // 4) On/Off bursty traffic
-        hold_requests(50, 1'b1);
-        hold_requests(50, 1'b0);
-        hold_requests(50, 1'b1);
+        do_hold_requests(50, 1'b1);
+        do_hold_requests(50, 1'b0);
+        do_hold_requests(50, 1'b1);
 
-        // 5) Heavy request pressure (req every cycle)
-        hold_requests(200, 1'b1);
+        // 5) Heavy pressure
+        do_hold_requests(200, 1'b1);
 
-        // ----------------- Report -----------------
+        // Report
         $display("====================================================");
         $display("Requests total : %0d", reqs_total);
         $display("Grants (ref)   : %0d", grants_ref);
         $display("Grants (DUT)   : %0d", grants_dut);
         $display("Errors         : %0d", error_count);
         if (error_count==0 && grants_ref==grants_dut)
-            $display("RESULT: PASS ✅  (DUT == reference, shaped correctly)");
+            $display("RESULT: PASS (DUT == reference, shaped correctly)");
         else
-            $display("RESULT: FAIL ❌");
+            $display("RESULT: FAIL");
         $display("Avg rate target ~ %0d/%0d = %f req/cycle",
-                 RATE_NUM, DEN, 1.0*RATE_NUM/DEN);
+                 RATE_NUM, DEN, (DEN!=0)?(1.0*RATE_NUM/DEN):0.0);
         $display("VCD written to token_bucket.vcd");
         $display("====================================================");
 
