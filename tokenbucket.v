@@ -1,21 +1,5 @@
 `timescale 1ns/1ps
-// -----------------------------------------------------------------------------
-// Token-Bucket Rate Limiter
-// - Adds RATE_NUM tokens per cycle, capped at BURST_MAX*DEN (fixed-point).
-// - Each grant costs TOKEN_COST tokens (default: DEN = "1 request").
-// - Grants only when a request is present AND enough tokens are available.
-// - Average grant rate <= RATE_NUM / DEN reqs/cycle, with bursts up to BURST_MAX.
-// -----------------------------------------------------------------------------
-// Parameters:
-//   DEN         : Fixed-point denominator (tokens per request = DEN)
-//   RATE_NUM    : Tokens added per cycle (0..DEN); avg rate = RATE_NUM/DEN reqs/cycle
-//   BURST_MAX   : Max whole-requests worth of tokens that can accumulate
-//   TOKEN_COST  : Tokens consumed per granted request (default = DEN)
-// I/O:
-//   req_i       : 1-cycle request pulse (can hold high to request every cycle)
-//   grant_o     : 1-cycle grant pulse when request is serviced
-//   ready_o     : Combinational: indicates tokens available for one request
-// -----------------------------------------------------------------------------
+
 module token_bucket #(
     parameter integer DEN        = 16,
     parameter integer RATE_NUM   = 3,
