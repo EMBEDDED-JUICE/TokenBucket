@@ -7,8 +7,6 @@ module tb_token_bucket;
     localparam BURST_MAX  = 8;   // max requests worth buffered
     localparam TOKEN_COST = DEN; // cost per grant
 
-    // Expected average rate = 3/16 reqs/cycle; burst up to 8 in a row (if filled)
-
     reg  clk, rst_n;
     reg  req_i;
     wire grant_o, ready_o;
@@ -19,7 +17,7 @@ module tb_token_bucket;
         .clk(clk), .rst_n(rst_n), .req_i(req_i), .grant_o(grant_o), .ready_o(ready_o)
     );
 
-    // Clock: 100 MHz (10 ns period)
+    // 100 MHz clock
     initial begin
         clk = 1'b0;
         forever #5 clk = ~clk;
@@ -37,16 +35,17 @@ module tb_token_bucket;
     integer grants_ref, grants_dut, reqs_total;
     integer error_count;
 
-    // -------- Stimulus helpers (Verilog-2001 compatible) --------
+    // Stimulus helpers (insert a tiny delay after posedge so DUT NBAs settle)
     task do_hold_requests;
         input integer cycles;
-        input on;           // 1-bit by default
+        input on;
         integer k;
         begin
             for (k = 0; k < cycles; k = k + 1) begin
                 @(negedge clk);
                 req_i = on;
                 @(posedge clk);
+                #1;  // <<<<<<<<<< key fix: allow NBAs to update grant_o
                 step_ref_and_check();
             end
         end
@@ -59,42 +58,37 @@ module tb_token_bucket;
         begin
             for (k = 0; k < cycles; k = k + 1) begin
                 @(negedge clk);
-                // $random returns signed 32-bit; make 0..99
-                r = $random;
-                if (r < 0) r = -r;
-                r = r % 100;
+                r = $random; if (r < 0) r = -r; r = r % 100;
                 req_i = (r < prob_perc);
                 @(posedge clk);
+                #1;  // <<<<<<<<<< key fix
                 step_ref_and_check();
             end
         end
     endtask
 
-    // One reference-model step + checks at each posedge
-    // *** POST-ADD semantics to match the DUT ***
+    // POST-ADD semantics to match DUT
     task step_ref_and_check;
         integer exp_grant;
         begin
-            // Count requests
             if (req_i) reqs_total = reqs_total + 1;
 
-            // Token accrual (saturate) FIRST
+            // accrue first (saturate)
             tokens_ref = tokens_ref + RATE_NUM;
             if (tokens_ref > TOK_MAX) tokens_ref = TOK_MAX;
 
-            // Decide expected grant using post-add tokens
+            // expected decision using post-add tokens
             exp_grant = (req_i && (tokens_ref >= TOKEN_COST)) ? 1 : 0;
 
-            // Consume if granted
             if (exp_grant) begin
                 tokens_ref = tokens_ref - TOKEN_COST;
                 grants_ref = grants_ref + 1;
             end
 
-            // DUT counters
+            // tally DUT
             if (grant_o) grants_dut = grants_dut + 1;
 
-            // Checks
+            // checks
             if (grant_o && !req_i) begin
                 $display("ERROR @%0t: grant without request", $time);
                 error_count = error_count + 1;
@@ -110,7 +104,7 @@ module tb_token_bucket;
     // ----------------- Test sequence -----------------
     initial begin
         TOK_MAX     = BURST_MAX * DEN;
-        tokens_ref  = TOK_MAX; // match DUT reset init
+        tokens_ref  = TOK_MAX; // start full to match DUT
         grants_ref  = 0;
         grants_dut  = 0;
         reqs_total  = 0;
@@ -121,13 +115,13 @@ module tb_token_bucket;
         repeat (5) @(posedge clk);
         rst_n = 1'b1;
 
-        // 1) Immediate burst drain (req high)
+        // 1) Immediate burst drain
         do_hold_requests(40, 1'b1);
 
         // 2) Idle to refill
         do_hold_requests(20, 1'b0);
 
-        // 3) Random traffic (30% requests)
+        // 3) Random traffic (30%)
         random_requests(300, 30);
 
         // 4) On/Off bursty traffic
