@@ -1,63 +1,67 @@
 `timescale 1ns/1ps
 
+// One-shot pulse generator
+// - If RETRIGGERABLE==0: ignore triggers while active
+// - If RETRIGGERABLE==1: retrigger/extend to PULSE_LEN on each rising edge
 module one_shot #(
-    parameter int PULSE_LEN     = 6,  // >= 1
-    parameter bit RETRIGGERABLE = 0
+    parameter PULSE_LEN     = 6,  // >=1
+    parameter RETRIGGERABLE = 0   // 0=non-retriggerable, 1=retriggerable
 )(
-    input  logic clk,
-    input  logic rst_n,   // active-low synchronous reset
-    input  logic trig,    // synchronous trigger
-    output logic y        // 1 while pulse is active
+    input  wire clk,
+    input  wire rst_n,   // active-low synchronous reset
+    input  wire trig,    // synchronous trigger
+    output reg  y        // 1 while pulse is active
 );
 
-    // Ceil log2 helper: enough bits for [0..PULSE_LEN]
-    function automatic int clog2_plus1(input int n);
-        int w; begin
-            w = 0; while ((1 << w) < n) w++;
-            return (w == 0) ? 1 : w;
-        end
-    endfunction
-    localparam int CW = clog2_plus1(PULSE_LEN + 1);
-
     // State
-    logic          trig_q;
-    logic [CW-1:0] cnt_q, cnt_n;
+    reg       trig_q;
+    integer   cnt_q;   // counts remaining cycles in the active pulse
+    integer   cnt_n;
 
-    // Sync edge detect
-    always_ff @(posedge clk) begin
+    // Rising-edge detect for trig
+    always @(posedge clk) begin
         if (!rst_n) trig_q <= 1'b0;
         else        trig_q <= trig;
     end
     wire trig_rise = trig & ~trig_q;
-    wire active    = (cnt_q != '0);
 
-    // Next-state counter
-    always_comb begin
-        cnt_n = cnt_q;
+    // Next-state logic for the counter
+    always @* begin
+        integer next;
+        next = cnt_q;
+
         if (trig_rise) begin
-            if (!active || RETRIGGERABLE) cnt_n = PULSE_LEN[CW-1:0];       // start/extend
-            else                          cnt_n = (cnt_q == '0) ? '0 : (cnt_q - 1); // ignore retrigger
+            if ((cnt_q == 0) || (RETRIGGERABLE != 0))
+                next = PULSE_LEN;            // start or extend pulse
+            else
+                next = (cnt_q > 0) ? (cnt_q - 1) : 0; // ignore retrigger; keep counting down
         end
-        else if (active) begin
-            cnt_n = cnt_q - 1;
+        else if (cnt_q > 0) begin
+            next = cnt_q - 1;                // count down while active
         end
         else begin
-            cnt_n = '0;
+            next = 0;                         // stay idle
         end
+
+        cnt_n = next;
     end
 
-    // State update + registered output reflecting next-state
-    always_ff @(posedge clk) begin
+    // Sequential state update and registered output
+    always @(posedge clk) begin
         if (!rst_n) begin
-            cnt_q <= '0;
+            cnt_q <= 0;
             y     <= 1'b0;
         end else begin
             cnt_q <= cnt_n;
-            y     <= (cnt_n != '0);
+            y     <= (cnt_n != 0);
         end
     end
 
-    // Parameter guard (sim aid)
-    initial if (PULSE_LEN < 1) $error("PULSE_LEN must be >= 1");
-
+    // Simple parameter guard (simulation aid)
+    initial begin
+        if (PULSE_LEN < 1) begin
+            $display("ERROR: PULSE_LEN must be >= 1");
+            $finish;
+        end
+    end
 endmodule
