@@ -1,47 +1,59 @@
-`timescale 1ns/1ps
+/* Write a Verilog module named token_bucket that implements a token bucket rate limiter.
+Parameters:
 
-module token_bucket #(
-    parameter integer DEN        = 16,
-    parameter integer RATE_NUM   = 3,
-    parameter integer BURST_MAX  = 8,
-    parameter integer TOKEN_COST = DEN
-)(
+DEN (default 16): denominator for fractional rate control (tokens per request).
+
+RATE_NUM (default 3): number of tokens added per cycle.
+
+BURST_MAX (default 8): maximum burst size, expressed in requests.
+
+TOKEN_COST (default = DEN): tokens consumed per granted request.
+
+Inputs:
+
+clk: clock.
+
+rst_n: active-low synchronous reset.
+
+req_i: request input.
+
+Outputs:
+
+grant_o: asserted when a request is accepted and tokens are consumed.
+
+ready_o: asserted whenever enough tokens are available for a request.
+
+Functional Behavior:
+
+Maintain an internal token counter (width at least 32 bits).
+
+On every clock cycle, add RATE_NUM tokens, but do not exceed the maximum capacity (BURST_MAX * DEN).
+
+If req_i is high and tokens ≥ TOKEN_COST:
+
+Assert grant_o for one cycle.
+
+Subtract TOKEN_COST tokens.
+
+Otherwise, keep grant_o low.
+
+ready_o is high whenever tokens ≥ TOKEN_COST.
+
+On reset (rst_n = 0), initialize the token counter to full capacity (BURST_MAX * DEN) and clear grant_o.*/
+
+module top_module #(
+    parameter DEN = 16,
+    parameter RATE_NUM = 3,
+    parameter BURST_MAX = 8,
+    parameter TOKEN_COST = DEN
+) (
     input  wire clk,
-    input  wire rst_n,      // active-low synchronous reset
+    input  wire rst_n,
     input  wire req_i,
-    output reg  grant_o,
+    output wire grant_o,
     output wire ready_o
 );
-    // Capacity in "token units" (scale = DEN per request)
-    localparam [31:0] TOK_MAX_32 = BURST_MAX * DEN;
 
-    // Token counter
-    reg  [31:0] tokens_q;
-
-    // --- Post-add saturated tokens this cycle ---
-    wire [32:0] sum_ext     = {1'b0, tokens_q} + RATE_NUM[31:0];
-    wire [32:0] tokmax_ext  = {1'b0, TOK_MAX_32};
-    wire [31:0] add_sat     = (sum_ext > tokmax_ext) ? TOK_MAX_32 : sum_ext[31:0];
-
-    // Decide grant using post-add tokens
-    wire        can_grant   = (add_sat >= TOKEN_COST[31:0]);
-    wire        will_grant  = req_i && can_grant;
-
-    // Next token count after optional consume
-    wire [31:0] next_tokens = will_grant ? (add_sat - TOKEN_COST[31:0]) : add_sat;
-
-    // Ready means: could we grant a request right now?
-    assign ready_o = can_grant;
-
-    // State update
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            tokens_q <= TOK_MAX_32;  // start full for immediate burst demo
-            grant_o  <= 1'b0;
-        end else begin
-            tokens_q <= next_tokens;
-            grant_o  <= will_grant;
-        end
-    end
+    // Implement the token bucket as specified above.
 
 endmodule
