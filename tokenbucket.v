@@ -1,59 +1,35 @@
-/* Write a Verilog module named token_bucket that implements a token bucket rate limiter.
+/*Write a synthesizable Verilog-2001 module with the following exact specification:
+
+Module name:
+top_module
+
 Parameters:
+- DEN (default 16)         // Denominator for scaling tokens
+- RATE_NUM (default 3)     // Tokens added per clock cycle
+- BURST_MAX (default 8)    // Maximum burst size in requests
+- TOKEN_COST (default DEN) // Tokens required per request
 
-DEN (default 16): denominator for fractional rate control (tokens per request).
+Ports:
+- input  wire clk          // Clock input
+- input  wire rst_n        // Active-low reset
+- input  wire req_i        // Incoming request
+- output wire grant_o      // Grant signal (asserted when request is allowed)
+- output wire ready_o      // Ready signal (high when enough tokens are available)
 
-RATE_NUM (default 3): number of tokens added per cycle.
+Functional requirements:
+1. Maintain a token counter `tokens` with a maximum capacity of `BURST_MAX * DEN`.
+2. On each rising clock edge:
+   - If reset is asserted low, initialize `tokens = BURST_MAX * DEN` (start full) and `grant_o = 0`.
+   - Otherwise:
+     * First add `RATE_NUM` tokens to `tokens` (saturate at `BURST_MAX * DEN`).
+     * If `req_i` is asserted and there are at least `TOKEN_COST` tokens, then:
+         - Assert `grant_o = 1`
+         - Subtract `TOKEN_COST` from tokens
+       Else:
+         - Keep `grant_o = 0`
+3. The `ready_o` signal must reflect whether enough tokens are available **after the add (post-add semantics)**, i.e. `ready_o = (tokens after add >= TOKEN_COST)`.
 
-BURST_MAX (default 8): maximum burst size, expressed in requests.
-
-TOKEN_COST (default = DEN): tokens consumed per granted request.
-
-Inputs:
-
-clk: clock.
-
-rst_n: active-low synchronous reset.
-
-req_i: request input.
-
-Outputs:
-
-grant_o: asserted when a request is accepted and tokens are consumed.
-
-ready_o: asserted whenever enough tokens are available for a request.
-
-Functional Behavior:
-
-Maintain an internal token counter (width at least 32 bits).
-
-On every clock cycle, add RATE_NUM tokens, but do not exceed the maximum capacity (BURST_MAX * DEN).
-
-If req_i is high and tokens ≥ TOKEN_COST:
-
-Assert grant_o for one cycle.
-
-Subtract TOKEN_COST tokens.
-
-Otherwise, keep grant_o low.
-
-ready_o is high whenever tokens ≥ TOKEN_COST.
-
-On reset (rst_n = 0), initialize the token counter to full capacity (BURST_MAX * DEN) and clear grant_o.*/
-
-module top_module #(
-    parameter DEN = 16,
-    parameter RATE_NUM = 3,
-    parameter BURST_MAX = 8,
-    parameter TOKEN_COST = DEN
-) (
-    input  wire clk,
-    input  wire rst_n,
-    input  wire req_i,
-    output wire grant_o,
-    output wire ready_o
-);
-
-    // Implement the token bucket as specified above.
-
-endmodule
+Implementation notes:
+- Use registers for `tokens` and the registered `grant` output.
+- Ensure saturation arithmetic (never allow tokens > BURST_MAX * DEN).
+- Match behavior to a reference token-bucket shaper.*/
