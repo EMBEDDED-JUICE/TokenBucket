@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-module tb_top_module;
+module tb;
 
     // ---- Tunable params (plain Verilog) ----
     localparam DEN        = 16;  // tokens per request
@@ -27,14 +27,15 @@ module tb_top_module;
     // Wave dump
     initial begin
         $dumpfile("token_bucket.vcd");
-        $dumpvars(0, tb_top_module);
+        $dumpvars(0, tb);
     end
 
     // ----------------- Reference Model (Scoreboard) -----------------
     integer TOK_MAX;
     integer tokens_ref;
     integer grants_ref, grants_dut, reqs_total;
-    integer error_count;
+    integer errors;      // total mismatches
+    integer clocks;      // total samples
 
     // Stimulus helpers (insert a tiny delay after posedge so DUT NBAs settle)
     task do_hold_requests;
@@ -72,6 +73,8 @@ module tb_top_module;
     task step_ref_and_check;
         integer exp_grant;
         begin
+            clocks = clocks + 1;
+
             if (req_i) reqs_total = reqs_total + 1;
 
             // accrue first (saturate)
@@ -92,12 +95,12 @@ module tb_top_module;
             // checks
             if (grant_o && !req_i) begin
                 $display("ERROR @%0t: grant without request", $time);
-                error_count = error_count + 1;
+                errors = errors + 1;
             end
             if (grant_o !== exp_grant) begin
                 $display("MISMATCH @%0t: exp_grant=%0d, dut_grant=%0d, tokens_ref=%0d",
                           $time, exp_grant, grant_o, tokens_ref);
-                error_count = error_count + 1;
+                errors = errors + 1;
             end
         end
     endtask
@@ -109,7 +112,8 @@ module tb_top_module;
         grants_ref  = 0;
         grants_dut  = 0;
         reqs_total  = 0;
-        error_count = 0;
+        errors      = 0;
+        clocks      = 0;
 
         // Reset
         rst_n = 1'b0; req_i = 1'b0;
@@ -138,8 +142,8 @@ module tb_top_module;
         $display("Requests total : %0d", reqs_total);
         $display("Grants (ref)   : %0d", grants_ref);
         $display("Grants (DUT)   : %0d", grants_dut);
-        $display("Errors         : %0d", error_count);
-        if (error_count==0 && grants_ref==grants_dut)
+        $display("Errors         : %0d", errors);
+        if (errors==0 && grants_ref==grants_dut)
             $display("RESULT: PASS (DUT == reference, shaped correctly)");
         else
             $display("RESULT: FAIL");
@@ -149,6 +153,13 @@ module tb_top_module;
         $display("====================================================");
 
         $finish;
+    end
+
+    // ---- Requested final summary ----
+    final begin
+        $display("Hint: Total mismatched samples is %1d out of %1d samples", errors, clocks);
+        $display("Simulation finished at %0d ps", $time);
+        $display("Mismatches: %1d in %1d samples", errors, clocks);
     end
 
 endmodule
